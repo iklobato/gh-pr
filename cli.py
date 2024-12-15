@@ -2,7 +2,6 @@ import asyncio
 import logging
 from datetime import datetime
 import os
-import json
 from typing import List, Dict, Any
 from rich.console import Console
 from rich.progress import Progress
@@ -21,32 +20,7 @@ logging.basicConfig(
 console = Console()
 
 
-class HistoryManager:
-    def __init__(self, storage_path: str = ".pr_history.json"):
-        self.storage_path = storage_path
-
-    def load_previous_results(self) -> Dict[str, Any]:
-        try:
-            if os.path.exists(self.storage_path):
-                with open(self.storage_path, 'r') as f:
-                    return json.load(f)
-            return {}
-        except json.JSONDecodeError:
-            logging.warning("Failed to load history file, starting fresh")
-            return {}
-
-    def save_results(self, user: str, pr_data: List[Dict[str, Any]]):
-        history = self.load_previous_results()
-        history[user] = {
-            'timestamp': datetime.now().isoformat(),
-            'data': pr_data
-        }
-        with open(self.storage_path, 'w') as f:
-            json.dump(history, f, indent=2)
-
-
 class GitHubPRClient:
-    # ... [Previous GitHubPRClient implementation remains unchanged]
     def __init__(self, token: str, repo_owner: str, repo_name: str):
         self.headers = {
             'Authorization': f'token {token}',
@@ -94,45 +68,14 @@ class InlinePRAnalyzer:
     def __init__(self, client: GitHubPRClient, args: argparse.Namespace):
         self.client = client
         self.args = args
-        self.history_manager = HistoryManager()
-
-    def calculate_diffs(self, current_data: List[Dict[str, Any]], previous_data: List[Dict[str, Any]]) -> List[
-        Dict[str, Any]]:
-        result = []
-        for curr in current_data:
-            pr_number = curr['PR #']
-            prev = next((p for p in previous_data if p['PR #'] == pr_number), None)
-
-            diff_row = curr.copy()
-            if prev:
-                for key, curr_value in curr.items():
-                    if key in ['PR #', 'Title', 'File Types']:  # Skip non-numeric fields
-                        continue
-                    try:
-                        prev_value = prev[key]
-                        if isinstance(curr_value, (int, float)) and isinstance(prev_value, (int, float)):
-                            diff = curr_value - prev_value
-                            if diff != 0:
-                                diff_row[key] = f"{curr_value} ([{'green' if diff > 0 else 'red'}]{diff:+d}[/])"
-                    except (TypeError, ValueError):
-                        continue
-            result.append(diff_row)
-
-        # Add PRs that were closed since last check
-        closed_prs = [p for p in previous_data if not any(c['PR #'] == p['PR #'] for c in current_data)]
-        for closed_pr in closed_prs:
-            closed_pr['Status'] = '[red]CLOSED[/]'
-            result.append(closed_pr)
-
-        return result
 
     def process_pr(self, pr: Dict[str, Any], details: Dict[str, Any]) -> Dict[str, Any]:
-        reviews = details['reviews']
+        # reviews = details['reviews']
         comments = details['comments']
         commits = details['commits']
         files = details['files']
 
-        approvers = [review['user']['login'] for review in reviews if review['state'].lower() == 'approved']
+        # approvers = [review['user']['login'] for review in reviews if review['state'].lower() == 'approved']
         created_date = datetime.strptime(pr['created_at'], '%Y-%m-%dT%H:%M:%SZ')
         date_diff = (datetime.now() - created_date).days
         file_types = set(f['filename'].split('.')[-1] if '.' in f['filename'] else 'no_ext' for f in files)
@@ -145,69 +88,8 @@ class InlinePRAnalyzer:
             'Commits': len(commits),
             'File Types': ', '.join(sorted(file_types)),
             'Comments': len(comments),
+            # 'Status': ('DRAFT' if pr['draft'] else ('READY' if approvers else 'PENDING REVIEW')),
         }
-
-    def display_results(self, data: List[Dict[str, Any]], user: str):
-        if self.args.output == 'json':
-            console.print_json(data=data)
-            return
-
-        previous_results = self.history_manager.load_previous_results()
-        previous_data = previous_results.get(user, {}).get('data', [])
-
-        if previous_data:
-            data = self.calculate_diffs(data, previous_data)
-
-        table = Table(show_header=True, header_style="bold magenta")
-
-        if not data:
-            console.print("[red]No PRs found matching criteria[/red]")
-            return
-
-        for column in data[0].keys():
-            table.add_column(column)
-
-        for row in data:
-            table.add_row(*[str(value) for value in row.values()])
-
-        console.print(table)
-
-        # Save current results
-        self.history_manager.save_results(user, data)
-
-    async def analyze(self):
-        try:
-            user = await self.get_user_selection()
-            if not user:
-                return
-
-            statuses = await self.get_status_selection()
-            if not statuses:
-                return
-
-            with Progress(disable=self.args.no_progress) as progress:
-                task = progress.add_task("[cyan]Fetching PRs...", total=None)
-                prs = await self.client.get_user_pull_requests(user)
-
-                if not prs:
-                    console.print(f"[yellow]No PRs found for user {user}[/yellow]")
-                    return
-
-                progress.update(task, description="[cyan]Processing PR details...")
-                pr_details = await asyncio.gather(*[self.client.get_pr_details(pr['number']) for pr in prs])
-
-            pr_data = [self.process_pr(pr, details) for pr, details in zip(prs, pr_details)]
-
-            if pr_data:
-                sort_by = self.get_sort_selection(list(pr_data[0].keys()))
-                pr_data.sort(key=lambda x: x[sort_by], reverse=True)
-                self.display_results(pr_data, user)
-            else:
-                console.print("[yellow]No PRs found matching selected statuses[/yellow]")
-
-        except aiohttp.ClientError as e:
-            console.print(f"[red]API Error: {e}[/red]")
-            raise
 
     async def get_user_selection(self) -> str:
         if self.args.user:
@@ -216,7 +98,7 @@ class InlinePRAnalyzer:
         users = await self.client.get_all_users()
         questions = [inquirer.List('user', message="Select user", choices=users, carousel=True)]
         answers = inquirer.prompt(questions)
-        return answers['user'] if answers else None
+        return answers['user'] if answers else ''
 
     async def get_available_statuses(self) -> List[str]:
         prs = await self.client.get_user_pull_requests()
@@ -280,6 +162,81 @@ class InlinePRAnalyzer:
         answers = inquirer.prompt(questions)
         return answers['sort'] if answers else 'Days Open'
 
+    def display_results(self, data: List[Dict[str, Any]]):
+        if self.args.output == 'json':
+            console.print_json(data=data)
+            return
+
+        table = Table(show_header=True, header_style="bold magenta")
+
+        if not data:
+            console.print("[red]No PRs found matching criteria[/red]")
+            return
+
+        for column in data[0].keys():
+            table.add_column(column)
+
+        for row in data:
+            table.add_row(*[str(value) for value in row.values()])
+
+        console.print(table)
+
+    async def analyze(self):
+        try:
+            user = await self.get_user_selection()
+            if not user:
+                return
+
+            # First progress for fetching PRs
+            with Progress(disable=self.args.no_progress) as progress:
+                fetch_task = progress.add_task("[cyan]Fetching PRs...", total=None)
+                prs = await self.client.get_user_pull_requests(user)
+                progress.update(fetch_task, completed=100)
+
+            if not prs:
+                console.print(f"[yellow]No PRs found for user {user}[/yellow]")
+                return
+
+            statuses = await self.get_status_selection()
+            if not statuses:
+                return
+
+            # Second progress for processing PR details
+            with Progress(disable=self.args.no_progress, transient=True) as progress:
+                details_task = progress.add_task(
+                    "[cyan]Processing PR details...", 
+                    total=len(prs)
+                )
+                
+                # Process PRs in smaller batches to avoid overwhelming the API
+                batch_size = 3
+                pr_details = []
+                
+                for i in range(0, len(prs), batch_size):
+                    batch = prs[i:i + batch_size]
+                    # Create tasks for the current batch
+                    batch_tasks = [self.client.get_pr_details(pr['number']) for pr in batch]
+                    # Wait for all tasks in the batch to complete
+                    batch_results = await asyncio.gather(*batch_tasks)
+                    pr_details.extend(batch_results)
+                    # Update progress for the completed batch
+                    progress.update(details_task, advance=len(batch))
+                    # Small delay to avoid rate limiting
+                    await asyncio.sleep(0.1)
+
+            pr_data = [self.process_pr(pr, details) for pr, details in zip(prs, pr_details)]
+
+            if pr_data:
+                sort_by = self.get_sort_selection(list(pr_data[0].keys()))
+                pr_data.sort(key=lambda x: x[sort_by], reverse=True)
+                self.display_results(pr_data)
+            else:
+                console.print("[yellow]No PRs found matching selected statuses[/yellow]")
+
+        except aiohttp.ClientError as e:
+            console.print(f"[red]API Error: {e}[/red]")
+            raise
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='GitHub PR Analysis Tool')
 
@@ -333,3 +290,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
