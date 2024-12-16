@@ -78,7 +78,9 @@ class InlinePRAnalyzer:
         # approvers = [review['user']['login'] for review in reviews if review['state'].lower() == 'approved']
         created_date = datetime.strptime(pr['created_at'], '%Y-%m-%dT%H:%M:%SZ')
         date_diff = (datetime.now() - created_date).days
-        file_types = set(f['filename'].split('.')[-1] if '.' in f['filename'] else 'no_ext' for f in files)
+        file_types = set(
+            f['filename'].split('.')[-1] if '.' in f['filename'] else 'no_ext' for f in files
+        )
 
         return {
             'PR #': pr['number'],
@@ -112,7 +114,11 @@ class InlinePRAnalyzer:
             details = await self.client.get_pr_details(pr['number'])
             reviews = details['reviews']
 
-            approvers = [review['user']['login'] for review in reviews if review['state'].lower() == 'approved']
+            approvers = [
+                review['user']['login']
+                for review in reviews
+                if review['state'].lower() == 'approved'
+            ]
             if approvers:
                 statuses.add('READY')
             else:
@@ -187,7 +193,6 @@ class InlinePRAnalyzer:
             if not user:
                 return
 
-            # First progress for fetching PRs
             with Progress(disable=self.args.no_progress) as progress:
                 fetch_task = progress.add_task("[cyan]Fetching PRs...", total=None)
                 prs = await self.client.get_user_pull_requests(user)
@@ -201,27 +206,20 @@ class InlinePRAnalyzer:
             if not statuses:
                 return
 
-            # Second progress for processing PR details
             with Progress(disable=self.args.no_progress, transient=True) as progress:
-                details_task = progress.add_task(
-                    "[cyan]Processing PR details...", 
-                    total=len(prs)
-                )
-                
-                # Process PRs in smaller batches to avoid overwhelming the API
+                details_task = progress.add_task("[cyan]Processing PR details...", total=len(prs))
+
                 batch_size = 3
                 pr_details = []
-                
+
                 for i in range(0, len(prs), batch_size):
-                    batch = prs[i:i + batch_size]
-                    # Create tasks for the current batch
+                    batch = prs[i:i+batch_size]
                     batch_tasks = [self.client.get_pr_details(pr['number']) for pr in batch]
-                    # Wait for all tasks in the batch to complete
                     batch_results = await asyncio.gather(*batch_tasks)
                     pr_details.extend(batch_results)
-                    # Update progress for the completed batch
+
                     progress.update(details_task, advance=len(batch))
-                    # Small delay to avoid rate limiting
+
                     await asyncio.sleep(0.1)
 
             pr_data = [self.process_pr(pr, details) for pr, details in zip(prs, pr_details)]
@@ -237,11 +235,14 @@ class InlinePRAnalyzer:
             console.print(f"[red]API Error: {e}[/red]")
             raise
 
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='GitHub PR Analysis Tool')
 
     parser.add_argument('--token', help='GitHub token (overrides GITHUB_TOKEN env var)')
-    parser.add_argument('--repo-owner', help='Repository owner (overrides GITHUB_REPO_OWNER env var)')
+    parser.add_argument(
+        '--repo-owner', help='Repository owner (overrides GITHUB_REPO_OWNER env var)'
+    )
     parser.add_argument('--repo-name', help='Repository name (overrides GITHUB_REPO_NAME env var)')
 
     parser.add_argument('--user', help='GitHub username to analyze (skips interactive selection)')
@@ -277,7 +278,9 @@ async def main():
 
     token = args.token or os.getenv('GITHUB_TOKEN')
     if not token:
-        console.print("[red]Missing GitHub token. Provide via --token or GITHUB_TOKEN env var[/red]")
+        console.print(
+            "[red]Missing GitHub token. Provide via --token or GITHUB_TOKEN env var[/red]"
+        )
         return
 
     repo_owner = args.repo_owner or os.getenv('GITHUB_REPO_OWNER', 'WannaApp')
@@ -290,4 +293,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
